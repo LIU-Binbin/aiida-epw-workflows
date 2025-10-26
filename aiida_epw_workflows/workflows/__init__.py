@@ -8,6 +8,7 @@ from .aniso import EpwAnisoWorkChain
 from .ibte import EpwIBTEWorkChain
 from .supercon import EpwSuperConWorkChain
 from .transport import EpwTransportWorkChain
+from .mobility import EpwMobilityWorkChain, EpwMobilityIntpWorkChain
 # from .controllers.base import EpwBaseWorkChainController
 
 __all__ = [
@@ -21,5 +22,7 @@ __all__ = [
     'EpwIBTEWorkChain',
     'EpwSuperConWorkChain',
     'EpwTransportWorkChain',
+    'EpwMobilityWorkChain',
+    'EpwMobilityIntpWorkChain',
     # 'EpwBaseWorkChainController'
 ]

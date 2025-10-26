@@ -1,0 +1,17 @@
+---
+default:
+  description: Basic defaults for the EPW mobility workflow.
+  inputs:
+    structure: null
+    clean_workdir: true
+    mobility:
+      epw:
+        metadata:
+          options: {}
+        parameters:
+          INPUTEPW:
+            degaussw: 0.005
+            temps: null
+            nsmear: 1
+      restart_type: from_scratch
+  codes: {}
