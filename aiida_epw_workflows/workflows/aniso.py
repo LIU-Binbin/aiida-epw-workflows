@@ -118,10 +118,15 @@ class EpwAnisoWorkChain(EpwBaseIntpWorkChain):
         #     'Tc_aniso', valid_type=orm.Float,
         #     help='The anisotropic Tc from fitting the gap function.')
 
-        spec.exit_code(402, 'ERROR_SUB_PROCESS_ANISO',
-            message='The `aniso` sub process failed')
-        spec.exit_code(403, 'ERROR_TEMPERATURE_OUT_OF_RANGE',
-            message='The `aniso` calculation have less than two temperatures within aniso Tc ')
+        spec.exit_code(
+            401, 'ERROR_SUB_PROCESS_B2W',
+            message='The `EpwAnisoWorkChain` failed at `b2w` step.')
+        spec.exit_code(
+            402, 'ERROR_SUB_PROCESS_ANISO',
+            message='The `EpwAnisoWorkChain` failed at `aniso` step.')
+        spec.exit_code(
+            403, 'ERROR_TEMPERATURE_OUT_OF_RANGE',
+            message='There is no gap at some temperature in the `aniso` step.')
 
     @classmethod
     def get_protocol_filepath(cls):
@@ -264,8 +269,10 @@ class EpwAnisoWorkChain(EpwBaseIntpWorkChain):
         intp_workchain = self.ctx.workchain_intp
 
         if not intp_workchain.is_finished_ok:
-            self.report(f'`epw.x` failed with exit status {intp_workchain.exit_status}')
+            self.report(f'`EpwBaseWorkChain`<{intp_workchain.pk}> failed with exit status {intp_workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_ANISO
+
+        self.report(f'`EpwBaseWorkChain`<{intp_workchain.pk}> finished successfully')
 
         if False:
             return self.handle_temperature_out_of_range(aniso)

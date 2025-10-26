@@ -2,28 +2,66 @@
 from aiida import orm
 from aiida.engine import WorkChain, ToContext, if_
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
+from aiida.common import AttributeDict, LinkType, NotExistentAttributeError
+from aiida_quantumespresso.workflows.pw.relax import PwRelaxWorkChain
+from aiida_quantumespresso.workflows.pw.bands import PwBandsWorkChain
 
 from .b2w import EpwB2WWorkChain
 from .bands import EpwBandsWorkChain
 
-from .bte import EpwBteWorkChain
+from .ibte import EpwIBTEWorkChain
 from .a2f import EpwA2fWorkChain
 
 class EpwTransportWorkChain(ProtocolMixin, WorkChain):
     """Workchain to calculate transport properties using EPW."""
 
     _NAMESPACE = 'transport'
+    _PW_RELAX_NAMESPACE = "pw_relax"
+    _PW_BANDS_NAMESPACE = "pw_bands"
     _B2W_NAMESPACE = EpwB2WWorkChain._NAMESPACE
     _BANDS_NAMESPACE = EpwBandsWorkChain._INTP_NAMESPACE
     _A2F_NAMESPACE = EpwA2fWorkChain._INTP_NAMESPACE
-    _BTE_NAMESPACE = EpwBteWorkChain._INTP_NAMESPACE
+    _IBTE_NAMESPACE = EpwIBTEWorkChain._INTP_NAMESPACE
 
 
     @classmethod
     def define(cls, spec):
-
+        # yapf: disable
+        super().define(spec)
         spec.input('structure', valid_type=orm.StructureData)
         spec.input('clean_workdir', valid_type=orm.Bool, default=lambda: orm.Bool(False))
+        spec.input('kfpoints_factor', required=False, valid_type=orm.Int, default=lambda: orm.Int(1))
+        spec.input('qfpoints', required=False, valid_type=orm.KpointsData)
+        spec.input('qfpoints_distance', required=False, valid_type=orm.Float, default=lambda: orm.Float(0.1))
+
+        spec.expose_inputs(
+            PwRelaxWorkChain,
+            namespace=cls._PW_RELAX_NAMESPACE,
+            exclude=(
+                'structure',
+                'clean_workdir',
+            ),
+            namespace_options={
+                'required': False,
+                'populate_defaults': False,
+                'help': 'Inputs for the `PwRelaxWorkChain`.'
+            }
+        )
+        spec.expose_inputs(
+            PwBandsWorkChain,
+            namespace=cls._PW_BANDS_NAMESPACE,
+            exclude=(
+                'structure',
+                'clean_workdir',
+                'bands_kpoints',
+                'bands_kpoints_distance',
+            ),
+            namespace_options={
+                'required': False,
+                'populate_defaults': False,
+                'help': 'Inputs for the `PwBandsWorkChain`.'
+            }
+        )
 
         spec.expose_inputs(
             EpwB2WWorkChain,
@@ -53,10 +91,53 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
                 'populate_defaults': False,
                 'help': 'Inputs for the `EpwBandsWorkChain`.'
             }
+        )        
+        
+        spec.expose_inputs(
+            EpwA2fWorkChain,
+            namespace=cls._A2F_NAMESPACE,
+            exclude=(
+                'clean_workdir',
+                'structure',
+                f'{cls._A2F_NAMESPACE}.parent_folder_nscf',
+                f'{cls._A2F_NAMESPACE}.parent_folder_chk',
+                f'{cls._A2F_NAMESPACE}.parent_folder_ph',
+            ),
+            namespace_options={
+                'required': False,
+                'populate_defaults': False,
+                'help': 'Inputs for the `EpwA2fWorkChain`.'
+            }
         )
+
+        spec.expose_inputs(
+            EpwIBTEWorkChain,
+            namespace=cls._IBTE_NAMESPACE,
+            exclude=(
+                'clean_workdir',
+                'structure',
+                f'{cls._IBTE_NAMESPACE}.parent_folder_nscf',
+                f'{cls._IBTE_NAMESPACE}.parent_folder_chk',
+                f'{cls._IBTE_NAMESPACE}.parent_folder_ph',
+            ),
+            namespace_options={
+                'required': False,
+                'populate_defaults': False,
+                'help': 'Inputs for the `EpwIBTEWorkChain`.'
+            }
+        )
+
         spec.outline(
             cls.setup,
             cls.validate_inputs,
+            if_(cls.should_run_pw_relax)(
+                cls.run_pw_relax,
+                cls.inspect_pw_relax,
+            ),
+            if_(cls.should_run_pw_bands)(
+                cls.run_pw_bands,
+                cls.inspect_pw_bands,
+            ),
             if_(cls.should_run_b2w)(
                 cls.run_b2w,
                 cls.inspect_b2w,
@@ -69,11 +150,33 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
                 cls.run_a2f,
                 cls.inspect_a2f,
             ),
-            if_(cls.should_run_bte)(
-                cls.run_bte,
-                cls.inspect_bte,
+            if_(cls.should_run_ibte)(
+                cls.run_ibte,
+                cls.inspect_ibte,
             ),
             cls.results
+        )
+        
+        spec.output(
+            "seekpath_parameters",
+            valid_type=orm.Dict,
+            required=False,
+            help="The parameters used in the SeeKpath call to normalize the input or relaxed structure.",
+        )
+
+        spec.expose_outputs(
+            PwRelaxWorkChain,
+            namespace=cls._PW_RELAX_NAMESPACE,
+            namespace_options={
+                'required': False,
+            }
+        )
+        spec.expose_outputs(
+            PwBandsWorkChain,
+            namespace=cls._PW_BANDS_NAMESPACE,
+            namespace_options={
+                'required': False,
+            }
         )
 
         spec.expose_outputs(
@@ -103,22 +206,25 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
             }
         )
         spec.expose_outputs(
-            EpwBteWorkChain,
-            namespace=cls._BTE_NAMESPACE,
+            EpwIBTEWorkChain,
+            namespace=cls._IBTE_NAMESPACE,
             namespace_options={
                 'required': False,
-                'help': 'Outputs from the `EpwBteWorkChain`.'
+                'help': 'Outputs from the `EpwIBTEWorkChain`.'
             }
         )
-
-        spec.exit_code(401, 'ERROR_SUB_PROCESS_B2W',
+        spec.exit_code(401, 'ERROR_SUB_PROCESS_PW_RELAX',
+            message='The `pw_relax` sub process failed')
+        spec.exit_code(402, 'ERROR_SUB_PROCESS_PW_BANDS',
+            message='The `pw_bands` sub process failed')
+        spec.exit_code(403, 'ERROR_SUB_PROCESS_B2W',
             message='The `b2w` sub process failed')
-        spec.exit_code(402, 'ERROR_SUB_PROCESS_BANDS',
+        spec.exit_code(404, 'ERROR_SUB_PROCESS_BANDS',
             message='The `bands` sub process failed')
-        spec.exit_code(403, 'ERROR_SUB_PROCESS_A2F',
+        spec.exit_code(405, 'ERROR_SUB_PROCESS_A2F',
             message='The `a2f` sub process failed')
-        spec.exit_code(405, 'ERROR_SUB_PROCESS_BTE',
-            message='The `bte` sub process failed')
+        spec.exit_code(406, 'ERROR_SUB_PROCESS_IBTE',
+            message='The `ibte` sub process failed')
 
     @classmethod
     def get_protocol_filepath(cls):
@@ -157,6 +263,29 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
 
         builder = cls.get_builder()
 
+        pw_relax_builder = PwRelaxWorkChain.get_builder_from_protocol(
+            code=codes['pw'],
+            structure=structure,
+            overrides=inputs.get(cls._PW_RELAX_NAMESPACE, {}),
+            **kwargs
+        )
+
+        pw_relax_builder.pop('structure', None)
+        pw_relax_builder.pop('clean_workdir', None)
+        pw_relax_builder.pop('base_final_scf', None)
+
+        builder[cls._PW_RELAX_NAMESPACE]._data = pw_relax_builder._data
+
+        # Set up the pw bands sub-workchain
+        pw_bands_builder = PwBandsWorkChain.get_builder_from_protocol(
+            code=codes['pw'],
+            structure=structure,
+            overrides=inputs.get(cls._PW_BANDS_NAMESPACE, {}),
+        )
+        pw_bands_builder.pop('relax', None)
+
+        builder[cls._PW_BANDS_NAMESPACE]._data = pw_bands_builder._data
+
         b2w_builder = EpwB2WWorkChain.get_builder_from_protocol(
             *args,
             overrides=inputs.get(cls._B2W_NAMESPACE, None),
@@ -167,8 +296,8 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
 
         for (epw_namespace, epw_workchain_class) in (
             (cls._BANDS_NAMESPACE, EpwBandsWorkChain),
-            (cls._A2F_NAMESPACE, EpwA2FWorkChain),
-            (cls._BTE_NAMESPACE, EpwBteWorkChain),
+            (cls._A2F_NAMESPACE, EpwA2fWorkChain),
+            (cls._IBTE_NAMESPACE, EpwIBTEWorkChain),
         ):
             epw_builder = epw_workchain_class.get_builder_from_protocol(
                 *args,
@@ -182,14 +311,38 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
 
 
         builder.structure = structure
-        # builder.interpolation_distances = orm.List(inputs.get('interpolation_distances', None))
-        # builder.convergence_threshold = orm.Float(inputs['convergence_threshold'])
-        # builder.always_run_final = orm.Bool(inputs.get('always_run_final', True))
+        builder.kfpoints_factor = orm.Int(inputs.get('kfpoints_factor', 1))
+        builder.qfpoints_distance = orm.Float(inputs.get('qfpoints_distance', 0.5))
         builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
 
         return builder
 
     def setup(self):
+        self.ctx.current_structure = self.inputs.structure
+
+
+        if (
+            self._PW_BANDS_NAMESPACE in self.inputs
+            or
+            self._BANDS_NAMESPACE in self.inputs
+            ):
+            from aiida_quantumespresso.calculations.functions.seekpath_structure_analysis import seekpath_structure_analysis
+
+            inputs = {
+                "structure": self.inputs.structure,
+                'metadata': {
+                    'call_link_label': 'seekpath'
+                }
+            }
+
+            if 'bands_kpoints_distance' in self.inputs:
+                inputs['reference_distance'] = self.inputs.bands_kpoints_distance
+
+            result = seekpath_structure_analysis(**inputs)
+            self.ctx.bands_kpoints = result['explicit_kpoints']
+            self.out('seekpath_parameters', result['parameters'])
+
+
         if self._BANDS_NAMESPACE in self.inputs:
             self.ctx.inputs_bands = AttributeDict(
                 self.exposed_inputs(
@@ -206,16 +359,114 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
                     )
                 )
 
-        if self._BTE_NAMESPACE in self.inputs:
-            self.ctx.inputs_bte = AttributeDict(
+        if self._IBTE_NAMESPACE in self.inputs:
+            self.ctx.inputs_ibte = AttributeDict(
                 self.exposed_inputs(
-                    EpwBteWorkChain,
-                    namespace=self._BTE_NAMESPACE
+                    EpwIBTEWorkChain,
+                    namespace=self._IBTE_NAMESPACE
                     )
                 )
 
     def validate_inputs(self):
         pass
+    def should_run_pw_relax(self):
+        """Check if the pw relax workflow should be run.
+        If 'pw_relax' is not in the inputs, it will return False.
+        """
+
+        return self._PW_RELAX_NAMESPACE in self.inputs
+
+    def run_pw_relax(self):
+        """Run the pw relax workflow."""
+
+        inputs = AttributeDict(
+            self.exposed_inputs(
+                PwRelaxWorkChain,
+                namespace=self._PW_RELAX_NAMESPACE
+            )
+        )
+
+        inputs.metadata.call_link_label = self._PW_RELAX_NAMESPACE
+        inputs.structure = self.ctx.current_structure
+
+        workchain_node = self.submit(PwRelaxWorkChain, **inputs)
+        self.report(f'launching `PwRelaxWorkChain`<{workchain_node.pk}>')
+
+        return ToContext(workchain_pw_relax=workchain_node)
+
+    def inspect_pw_relax(self):
+        """Verify that the pw relax workflow finished successfully."""
+
+        workchain = self.ctx.workchain_pw_relax
+
+        if not workchain.is_finished_ok:
+            self.report(f'`PwRelaxWorkChain`<{workchain.pk}> failed with exit status {workchain.exit_status}')
+            return self.exit_codes.ERROR_SUB_PROCESS_PW_RELAX
+
+        self.report(f'`PwRelaxWorkChain`<{workchain.pk}> finished successfully')
+        self.ctx.current_structure = workchain.outputs.output_structure
+        self.ctx.nbnd = workchain.outputs.output_parameters.get('number_of_bands')
+        self.out_many(
+            self.exposed_outputs(
+                workchain,
+                PwRelaxWorkChain,
+                namespace=self._PW_RELAX_NAMESPACE,
+            ),
+        )
+
+        # Immediately clean the workdir of the pw relax workchain
+        self._clean_workdir(workchain)
+
+    def should_run_pw_bands(self):
+        """Check if the pw bands workflow should be run.
+        If 'pw_bands' is not in the inputs or the 'kpoints_nscf' is not in the context, it will return False.
+        """
+
+        return self._PW_BANDS_NAMESPACE in self.inputs
+
+    def run_pw_bands(self):
+        """Run the pw bands workflow."""
+
+        inputs = AttributeDict(
+            self.exposed_inputs(
+                PwBandsWorkChain,
+                namespace=self._PW_BANDS_NAMESPACE
+                )
+        )
+
+        inputs.metadata.call_link_label = self._PW_BANDS_NAMESPACE
+        inputs.structure = self.ctx.current_structure
+        inputs.bands_kpoints = self.ctx.bands_kpoints
+
+        parameters = inputs.scf.pw.parameters.get_dict()
+        if self.ctx.nbnd:
+            parameters['SYSTEM']['nbnd'] = self.ctx.nbnd
+        inputs.scf.pw.parameters = orm.Dict(parameters)
+
+        workchain_node = self.submit(PwBandsWorkChain, **inputs)
+        self.report(f'launching `PwBandsWorkChain`<{workchain_node.pk}>')
+
+        return ToContext(workchain_pw_bands=workchain_node)
+
+    def inspect_pw_bands(self):
+        """Verify that the pw bands workflow finished successfully."""
+
+        workchain = self.ctx.workchain_pw_bands
+
+        if not workchain.is_finished_ok:
+            self.report(f'`PwBandsWorkChain`<{workchain.pk}> failed with exit status {workchain.exit_status}')
+            return self.exit_codes.ERROR_SUB_PROCESS_PW_BANDS
+        self.report(f'`PwBandsWorkChain`<{workchain.pk}> finished successfully')
+        self.out_many(
+            self.exposed_outputs(
+                workchain,
+                PwBandsWorkChain,
+                namespace=self._PW_BANDS_NAMESPACE,
+            ),
+        )
+
+        # Immediately clean the workdir of the pw bands workchain
+        self._clean_workdir(workchain)
 
     def should_run_b2w(self):
         return self._B2W_NAMESPACE in self.inputs
@@ -229,6 +480,7 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
             )
         )
         inputs.metadata.call_link_label = self._B2W_NAMESPACE
+        inputs.structure = self.ctx.current_structure
         workchain_node = self.submit(EpwB2WWorkChain, **inputs)
 
         self.report(f'launching EpwB2WWorkChain<{workchain_node.pk}>')
@@ -241,12 +493,13 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
         b2w_workchain = self.ctx.workchain_b2w
 
         if not b2w_workchain.is_finished_ok:
-            self.report(f'`epw.x` failed with exit status {b2w_workchain.exit_status}')
+            self.report(f'`EpwB2WWorkChain`<{b2w_workchain.pk}> failed with exit status {b2w_workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_B2W
 
+        self.report(f'`EpwB2WWorkChain`<{b2w_workchain.pk}> finished successfully')
         self.out_many(
             self.exposed_outputs(
-                self.ctx.workchain_b2w,
+                b2w_workchain,
                 EpwB2WWorkChain,
                 namespace=self._B2W_NAMESPACE
             )
@@ -258,7 +511,7 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
             if self.should_run_b2w():
                 b2w_workchain = self.ctx.workchain_b2w
 
-                parent_folder_epw = b2w_workchain.outputs.epw.remote_folder
+                parent_folder_epw = b2w_workchain.outputs.epw_base.remote_folder
 
                 self.ctx.inputs_bands[self._BANDS_NAMESPACE].parent_folder_epw = parent_folder_epw
 
@@ -269,7 +522,7 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
     def run_bands(self):
         """Run the bands workflow."""
         inputs = self.ctx.inputs_bands
-        inputs.structure = self.inputs.structure
+        inputs.structure = self.ctx.current_structure
         inputs.metadata.call_link_label = self._BANDS_NAMESPACE
 
         workchain_node = self.submit(EpwBandsWorkChain, **inputs)
@@ -283,12 +536,12 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
         bands_workchain = self.ctx.workchain_bands
 
         if not bands_workchain.is_finished_ok:
-            self.report(f'`epw.x` failed with exit status {bands_workchain.exit_status}')
+            self.report(f'`EpwBandsWorkChain`<{bands_workchain.pk}> failed with exit status {bands_workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_BANDS
-
+        self.report(f'`EpwBandsWorkChain`<{bands_workchain.pk}> finished successfully')
         self.out_many(
             self.exposed_outputs(
-                self.ctx.workchain_bands,
+                bands_workchain,
                 EpwBandsWorkChain,
                 namespace=self._BANDS_NAMESPACE
             )
@@ -299,7 +552,7 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
         if self._A2F_NAMESPACE in self.inputs:
             if self.should_run_b2w():
                 b2w_workchain = self.ctx.workchain_b2w
-                parent_folder_epw = b2w_workchain.outputs.epw.remote_folder
+                parent_folder_epw = b2w_workchain.outputs.epw_base.remote_folder
                 self.ctx.inputs_a2f[self._A2F_NAMESPACE].parent_folder_epw = parent_folder_epw
             return True
         else:
@@ -308,7 +561,8 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
     def run_a2f(self):
         """Run the a2f workflow."""
         inputs = self.ctx.inputs_a2f
-        inputs.structure = self.inputs.structure
+        inputs.structure = self.ctx.current_structure
+        inputs.a2f.qfpoints_distance = self.inputs.qfpoints_distance
 
         inputs.metadata.call_link_label = self._A2F_NAMESPACE
         workchain_node = self.submit(EpwA2fWorkChain, **inputs)
@@ -321,56 +575,86 @@ class EpwTransportWorkChain(ProtocolMixin, WorkChain):
         """Inspect the a2f workflow."""
         a2f_workchain = self.ctx.workchain_a2f
         if not a2f_workchain.is_finished_ok:
-            self.report(f'`epw.x` failed with exit status {a2f_workchain.exit_status}')
+            self.report(f'`EpwA2fWorkChain`<{a2f_workchain.pk}> failed with exit status {a2f_workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_A2F
 
+        self.report(f'`EpwA2fWorkChain`<{a2f_workchain.pk}> finished successfully')
         self.out_many(
             self.exposed_outputs(
-                self.ctx.workchain_a2f,
+                a2f_workchain,
                 EpwA2fWorkChain,
                 namespace=self._A2F_NAMESPACE
             )
         )
 
-    def should_run_bte(self):
-        """Check if the bte workflow should continue or not."""
-        if self._BTE_NAMESPACE in self.inputs:
-            if self.should_run_a2f():
-                a2f_workchain = self.ctx.workchain_a2f
-                parent_folder_epw = a2f_workchain.outputs.remote_folder
-                self.ctx.inputs_bte[self._BTE_NAMESPACE].parent_folder_epw = parent_folder_epw
+    def should_run_ibte(self):
+        """Check if the ibte workflow should continue or not."""
+        if self._IBTE_NAMESPACE in self.inputs:
+            if self.should_run_b2w():
+                b2w_workchain = self.ctx.workchain_b2w
+                parent_folder_epw = b2w_workchain.outputs.epw_base.remote_folder
+                self.ctx.inputs_ibte[self._IBTE_NAMESPACE].parent_folder_epw = parent_folder_epw
             return True
         else:
             return False
 
-    def run_bte(self):
-        """Run the bte workflow."""
-        inputs = self.ctx.inputs_bte
-        inputs.structure = self.inputs.structure
-        inputs.metadata.call_link_label = self._BTE_NAMESPACE
-        workchain_node = self.submit(EpwBteWorkChain, **inputs)
+    def run_ibte(self):
+        """Run the ibte workflow."""
+        inputs = self.ctx.inputs_ibte
+        inputs.structure = self.ctx.current_structure
+        # TODO: We should then use the input fine grid from a2f workchain for full consistency.
+        inputs.ibte.qfpoints_distance = self.inputs.qfpoints_distance
+        inputs.metadata.call_link_label = self._IBTE_NAMESPACE
+        workchain_node = self.submit(EpwIBTEWorkChain, **inputs)
 
-        self.report(f'launching EpwBteWorkChain<{workchain_node.pk}>')
+        self.report(f'launching EpwIBTEWorkChain<{workchain_node.pk}>')
 
-        return ToContext(workchain_bte=workchain_node)
+        return ToContext(workchain_ibte=workchain_node)
 
-    def inspect_bte(self):
-        """Inspect the bte workflow."""
-        bte_workchain = self.ctx.workchain_bte
-        if not bte_workchain.is_finished_ok:
-            self.report(f'`epw.x` failed with exit status {bte_workchain.exit_status}')
-            return self.exit_codes.ERROR_SUB_PROCESS_BTE
+    def inspect_ibte(self):
+        """Inspect the ibte workflow."""
+        ibte_workchain = self.ctx.workchain_ibte
+        if not ibte_workchain.is_finished_ok:
+            self.report(f'`EpwIBTEWorkChain`<{ibte_workchain.pk}> failed with exit status {ibte_workchain.exit_status}')
+            return self.exit_codes.ERROR_SUB_PROCESS_IBTE
 
+        self.report(f'`EpwIBTEWorkChain`<{ibte_workchain.pk}> finished successfully')
         self.out_many(
             self.exposed_outputs(
-                self.ctx.workchain_bte,
-                EpwBteWorkChain,
-                namespace=self._BTE_NAMESPACE
+                ibte_workchain,
+                EpwIBTEWorkChain,
+                namespace=self._IBTE_NAMESPACE
             )
         )
 
     def results(self):
         pass
 
+    @staticmethod
+    def _clean_workdir(node):
+        """Clean the working directories of all child calculations if `clean_workdir=True` in the inputs."""
+
+        cleaned_calcs = []
+
+        for called_descendant in node.called_descendants:
+            if isinstance(called_descendant, orm.CalcJobNode):
+                try:
+                    called_descendant.outputs.remote_folder._clean()  # pylint: disable=protected-access
+                    cleaned_calcs.append(called_descendant.pk)
+                except (IOError, OSError, KeyError, NotExistentAttributeError):
+                    pass
+
+        return cleaned_calcs
+
     def on_terminated(self):
-        pass
+        super().on_terminated()
+
+        if self.inputs.clean_workdir.value is False:
+            self.report('remote folders will not be cleaned')
+            return
+
+        cleaned_calcs = self._clean_workdir(self.node)
+
+        if cleaned_calcs:
+            self.report(f"cleaned remote folders of calculations: {' '.join(map(str, cleaned_calcs))}")
+

@@ -50,11 +50,45 @@ def calculate_Allen_Dynes_tc(a2f: ArrayData, mustar = 0.13) -> Float:
 
     return Float(Tc)
 
+def check_convergence(
+    a2f_tcs,
+    convergence_threshold
+    ):
+    """Check if the convergence is reached."""
+    if len(a2f_tcs) < 3:
+        return (False, 'Not enough data to check convergence.')
+    else:
+        subsequent_differences = [
+            abs((prev_allen_dynes - new_allen_dynes)/new_allen_dynes)
+            for prev_allen_dynes, new_allen_dynes in zip(a2f_tcs[:-1], a2f_tcs[1:])
+        ]
+
+        if all([difference < convergence_threshold for difference in subsequent_differences[-1:]]):
+            return (True, a2f_tcs[-1])
+        else:
+            return (False, None)
+
+def _calculate_iso_tc(max_eigenvalue, allow_extrapolation=False):
+    if max_eigenvalue[:, 1].max() < 1.0:
+        return 0.0
+    elif max_eigenvalue[:, 1].min() > 1.0:
+        if allow_extrapolation:
+            print("This Tc is estimated from the extrapolation of the max eigenvalues. Please check whether it's reliable.")
+            f_extrapolate = interp1d(
+                max_eigenvalue[:, 1],
+                max_eigenvalue[:, 0],
+                kind='linear',          # Can be 'linear', 'quadratic', etc. for interpolation
+                bounds_error=False,     # Do not raise an error for out-of-bounds values
+                fill_value="extrapolate" # Extrapolate using a line from the last two points
+                )
+            return float(f_extrapolate(1.0))
+        else:
+            return numpy.nan
+    else:
+        return float(interp1d(max_eigenvalue[:, 1], max_eigenvalue[:, 0])(1.0))
+
+
 @calcfunction
 def calculate_iso_tc(max_eigenvalue: XyData) -> Float:
-    me_array = max_eigenvalue.get_array('max_eigenvalue')
-    if me_array[:, 1].max() < 1.0:
-        return Float(0.0)
-    else:
-        return Float(float(interp1d(me_array[:, 1], me_array[:, 0])(1.0)))
+    return Float(_calculate_iso_tc(max_eigenvalue.get_array('max_eigenvalue')))
 

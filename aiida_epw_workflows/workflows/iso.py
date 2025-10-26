@@ -6,6 +6,10 @@ from .intp import EpwBaseIntpWorkChain
 from .base import EpwBaseWorkChain
 from ..tools.calculators import calculate_iso_tc
 
+### Note: We should later add the support for:
+#      Error in routine crit_temp_solver (1):
+#      Convergence (tc_linear) was not reached
+
 
 class EpwIsoWorkChain(EpwBaseIntpWorkChain):
     """Work chain to compute the superconductivity based on Migdal-Eliashberg theory.
@@ -42,9 +46,13 @@ class EpwIsoWorkChain(EpwBaseIntpWorkChain):
         spec.output('Tc_iso', valid_type=orm.Float,
                     help='The isotropic Tc interpolated from the a2f file.')
 
+        spec.exit_code(401, 'ERROR_SUB_PROCESS_B2W',
+            message='The `EpwIsoWorkChain` failed at `b2w` step.')
         spec.exit_code(402, 'ERROR_SUB_PROCESS_ISO',
-            message='The `iso` sub process failed')
-
+            message='The `EpwIsoWorkChain` failed at `iso` step.')
+        spec.exit_code(403, 'ERROR_TEMPERATURE_OUT_OF_RANGE',
+            message='There is no gap at some temperature in the `iso` step.')
+            
     @classmethod
     def get_protocol_filepath(cls):
         """Return ``pathlib.Path`` to the ``.yaml`` file that defines the protocols."""
@@ -145,8 +153,10 @@ class EpwIsoWorkChain(EpwBaseIntpWorkChain):
         intp_workchain = self.ctx.workchain_intp
 
         if not intp_workchain.is_finished_ok:
-            self.report(f'`epw.x` failed with exit status {intp_workchain.exit_status}')
+            self.report(f'`EpwBaseWorkChain`<{intp_workchain.pk}> failed with exit status {intp_workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_ISO
+
+        self.report(f'`EpwBaseWorkChain`<{intp_workchain.pk}> finished successfully')
 
         inputs = {
                 'max_eigenvalue':intp_workchain.outputs.max_eigenvalue,

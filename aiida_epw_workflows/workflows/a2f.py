@@ -16,11 +16,22 @@ class EpwA2fWorkChain(EpwBaseIntpWorkChain):
     _INTP_NAMESPACE = 'a2f'
     _ALL_NAMESPACES = [EpwBaseIntpWorkChain._B2W_NAMESPACE, _INTP_NAMESPACE]
 
-    _forced_parameters =  EpwBaseIntpWorkChain._forced_parameters.copy()
-    _forced_parameters['INPUTEPW']  = EpwBaseIntpWorkChain._forced_parameters['INPUTEPW'] | {
-          'eliashberg': True,
-          'ephwrite': True,
-        }
+    # _forced_parameters =  EpwBaseIntpWorkChain._forced_parameters.copy()
+    # _forced_parameters['INPUTEPW']  = EpwBaseIntpWorkChain._forced_parameters['INPUTEPW'] | {
+    #       'eliashberg': True,
+    #       'ephwrite': True,
+    #     }
+
+    INPUTEPW_A2F_DEFAULT = {
+        'phonselfen': True,
+        'a2f': True,
+        'mp_mesh_k': False,
+    }
+
+    INPUTEPW_A2F_ELIASHBERG = {
+        'eliashberg': True,
+        'ephwrite': True,
+    }
 
     @classmethod
     def validate_inputs(cls, inputs, ctx=None):
@@ -32,13 +43,19 @@ class EpwA2fWorkChain(EpwBaseIntpWorkChain):
         """Define the work chain specification."""
         super().define(spec)
 
-
+        
+        spec.input('eliashberg', valid_type=orm.Bool, default=lambda: orm.Bool(True),
+                    help='Whether to calculate superconductivity from spectral function.')
         spec.inputs[cls._INTP_NAMESPACE].validator = cls.validate_inputs
         spec.inputs.validator = cls.validate_inputs
+        
+        spec.exit_code(
+            401, 'ERROR_SUB_PROCESS_B2W',
+            message='The `EpwA2fWorkChain` failed at `b2w` step.')
 
         spec.exit_code(
             402, 'ERROR_SUB_PROCESS_A2F',
-            message='The `epw.x` workflow failed.'
+            message='The `EpwA2fWorkChain` failed at `a2f` step.'
             )
 
     @classmethod
@@ -85,6 +102,7 @@ class EpwA2fWorkChain(EpwBaseIntpWorkChain):
         :param overrides: The overrides.
         :return: The builder.
         """
+        inputs = cls.get_protocol_inputs(protocol, overrides)
         builder = super().get_builder_from_protocol(
             codes,
             structure,
@@ -93,26 +111,8 @@ class EpwA2fWorkChain(EpwBaseIntpWorkChain):
             **kwargs
             )
 
+        builder.eliashberg = orm.Bool(inputs.get('eliashberg', True))
         return builder
-
-    @staticmethod
-    def calculate_degaussq(workchain_a2f):
-        """Calculate the degaussq for the a2f calculation based on the `ph.x` results.
-        :param workchain_a2f: The a2f workchain.
-        :return: The degaussq.
-        """
-        import numpy
-
-        output_parameters = workchain_a2f.inputs.parent_folder_epw.creator.inputs.parent_folder_ph.creator.outputs.output_parameters.get_dict()
-        number_of_qpoints = output_parameters.get('number_of_qpoints')
-        dynamical_matricies = numpy.array([
-            output_parameters.get(f'dynamical_matricies_{iq+1}').get('frequencies') for iq in range(number_of_qpoints)
-            ])
-
-        max_frequency = numpy.max(dynamical_matricies)
-        degaussq = max_frequency / 100
-
-        return degaussq
 
     def prepare_process(self):
         """Prepare for the `EpwBaseWorkChain`.
@@ -139,13 +139,23 @@ class EpwA2fWorkChain(EpwBaseIntpWorkChain):
 
         self.ctx.inputs.epw.settings = orm.Dict(settings)
 
+        parameters = self.ctx.inputs.epw.parameters.get_dict()
+        if self.inputs.eliashberg:
+            parameters['INPUTEPW'].update(self.INPUTEPW_A2F_ELIASHBERG)
+        else:
+            parameters['INPUTEPW'].update(self.INPUTEPW_A2F_DEFAULT)
+        
+        self.ctx.inputs.epw.parameters = orm.Dict(parameters)
+
     def inspect_process(self):
         """Verify that the `EpwBaseWorkChain` finished successfully."""
         intp_workchain = self.ctx.workchain_intp
 
         if not intp_workchain.is_finished_ok:
-            self.report(f'`epw.x` failed with exit status {intp_workchain.exit_status}')
+            self.report(f'`EpwBaseWorkChain`<{intp_workchain.pk}> failed with exit status {intp_workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_A2F
+
+        self.report(f'`EpwBaseWorkChain`<{intp_workchain.pk}> finished successfully')
 
     def results(self):
         """Only the basic results are retrieved:

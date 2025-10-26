@@ -3,22 +3,19 @@ default_inputs:
   interpolation_distances:
     - 0.2
     - 0.1
-    # - 0.08
-    # - 0.06
-    # - 0.05
   convergence_threshold: 0.1
   always_run_final: True
   b2w:
-    b2w:
-      metadata:
-        options:
-          withmpi: True
+    metadata:
+      options:
+        withmpi: True
   bands:
     bands:
       metadata:
         options:
           withmpi: True
   a2f:
+    eliashberg: True
     a2f:
       metadata:
         options:

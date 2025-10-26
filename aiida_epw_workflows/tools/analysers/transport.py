@@ -15,19 +15,17 @@ from .base import BaseWorkChainAnalyser
 from enum import Enum
 from aiida.tools import delete_nodes
 from .b2w import EpwB2WWorkChainAnalyser
-from ..calculators import _calculate_iso_tc, check_convergence
 from ..plot import (
     plot_epw_interpolated_bands,
     plot_a2f,
     plot_eldos,
-    plot_gap_function,
     plot_bands_comparison,
     plot_bands,
-    plot_aniso,
     plot_phdos
 )
 
-class EpwSuperConWorkChainState(Enum):
+
+class EpwTransportWorkChainState(Enum):
     FINISHED_OK = 0
     WAITING = 1
     RUNNING = 2
@@ -49,11 +47,7 @@ class EpwSuperConWorkChainState(Enum):
     BANDS_UNSTABLE = 4013
     CONVERGENCE_NOT_REACHED = 4014
     A2F_FAILED = 4015
-    A2F_CONV_FAILED = 4016
-    ALLEN_DYNES_TC_TOO_LOW = 4017
-    ISO_FAILED = 4018
-    ISO_TC_TOO_LOW = 4019
-    ANISO_FAILED = 4020
+    IBTE_FAILED = 4016
     PW_RELAX_EXCEPTED = 901
     PW_BANDS_EXCEPTED = 902
     B2W_EXCEPTED = 903
@@ -62,9 +56,7 @@ class EpwSuperConWorkChainState(Enum):
     B2W_EPW_BASE_EXCEPTED = 906
     BANDS_EXCEPTED = 907
     A2F_EXCEPTED = 908
-    A2F_CONV_EXCEPTED = 909
-    ISO_EXCEPTED = 910
-    ANISO_EXCEPTED = 911
+    IBTE_EXCEPTED = 909
     PW_RELAX_KILLED = 912
     PW_BANDS_KILLED = 913
     B2W_W90_INTP_SCF_KILLED = 914
@@ -75,10 +67,7 @@ class EpwSuperConWorkChainState(Enum):
     B2W_EPW_BASE_KILLED = 919
     B2W_MATDYN_BASE_KILLED = 920
     BANDS_KILLED = 921
-    A2F_CONV_KILLED = 922
-    A2F_KILLED = 923
-    ISO_KILLED = 924
-    ANISO_KILLED = 925
+    IBTE_KILLED = 922
     PW_RELAX_FINISHED_OK = 1001
     PW_BANDS_FINISHED_OK = 1002
     B2W_W90_INTP_SCF_FINISHED_OK = 1003
@@ -89,32 +78,27 @@ class EpwSuperConWorkChainState(Enum):
     B2W_EPW_BASE_FINISHED_OK = 1008
     B2W_FINISHED_OK = 1009
     BANDS_FINISHED_OK = 1010
-    A2F_FINISHED_OK = 1011
-    A2F_CONV_FINISHED_OK = 1012
-    ISO_FINISHED_OK = 1013
-    ANISO_FINISHED_OK = 1014
+    IBTE_FINISHED_OK = 1012
     UNKNOWN = 999
 
 from collections import OrderedDict
 
-class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
+class EpwTransportWorkChainAnalyser(BaseWorkChainAnalyser):
     """
-    Analyser for the EpwSuperConWorkChain.
+    Analyser for the EpwTransportWorkChain.
     """
     _all_descendants = OrderedDict([
         ('pw_relax', None),
         ('pw_bands', None),
         ('b2w',      None),
         ('bands',    None),
-        ('a2f_conv', None),
         ('a2f',      None),
-        ('iso',      None),
-        ('aniso',    None),
+        ('ibte',     None),
     ])
 
     def __init__(self, workchain: orm.WorkChainNode):
         super().__init__(workchain)
-        self.state = EpwSuperConWorkChainState.UNKNOWN
+        self.state = EpwTransportWorkChainState.UNKNOWN
         for link_label, _ in self._all_descendants.items():
             descendants = workchain.base.links.get_outgoing(link_label_filter=link_label).all_nodes()
             if descendants != []:
@@ -123,22 +107,22 @@ class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
     @staticmethod
     def base_check(
         workchain: orm.WorkChainNode,
-        excepted_state: EpwSuperConWorkChainState,
-        failed_state: EpwSuperConWorkChainState,
-        killed_state: EpwSuperConWorkChainState,
-        finished_ok_state: EpwSuperConWorkChainState,
+        excepted_state: EpwTransportWorkChainState,
+        failed_state: EpwTransportWorkChainState,
+        killed_state: EpwTransportWorkChainState,
+        finished_ok_state: EpwTransportWorkChainState,
         namespace: str,
-        ) -> tuple[EpwSuperConWorkChainState, str]:
+        ) -> tuple[EpwTransportWorkChainState, str]:
         if not workchain:
             return (
                 finished_ok_state,
                 '{namespace} is not found, should be skipped'
             )
         if workchain.process_state == ProcessState.WAITING:
-            state = EpwSuperConWorkChainState.WAITING
+            state = EpwTransportWorkChainState.WAITING
             message = f'is waiting at {namespace}'
         elif workchain.process_state == ProcessState.RUNNING:
-            state = EpwSuperConWorkChainState.RUNNING
+            state = EpwTransportWorkChainState.RUNNING
             message = f'is running at {namespace}'
         elif workchain.process_state == ProcessState.EXCEPTED:
             state = excepted_state
@@ -154,7 +138,7 @@ class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
                 state = finished_ok_state
                 message = f'{namespace} is finished successfully'
         else:
-            state = EpwSuperConWorkChainState.UNKNOWN
+            state = EpwTransportWorkChainState.UNKNOWN
             message = f'unknown state at {namespace}'
 
         return state, message
@@ -236,13 +220,6 @@ class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
             return self.descendants['bands']
 
     @property
-    def a2f_conv(self):
-        if 'a2f_conv' not in self.descendants or self.descendants['a2f_conv'] == []:
-            return None
-        else:
-            return self.descendants['a2f_conv']
-
-    @property
     def a2f(self):
         if 'a2f' not in self.descendants or self.descendants['a2f'] == []:
             return None
@@ -250,18 +227,11 @@ class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
             return self.descendants['a2f']
 
     @property
-    def iso(self):
-        if self.descendants['iso'] == []:
-            raise None
-        else:
-            return self.descendants['iso']
-
-    @property
-    def aniso(self):
-        if self.descendants['aniso'] == []:
+    def ibte(self):
+        if 'ibte' not in self.descendants or self.descendants['ibte'] == []:
             return None
         else:
-            return self.descendants['aniso']
+            return self.descendants['ibte']
 
     def check_pw_relax(self):
         """Check the state of the pw_relax workchain."""
@@ -269,10 +239,10 @@ class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
 
         return self.base_check(
             self.pw_relax[-1],
-            EpwSuperConWorkChainState.PW_RELAX_EXCEPTED,
-            EpwSuperConWorkChainState.PW_RELAX_FAILED,
-            EpwSuperConWorkChainState.PW_RELAX_KILLED,
-            EpwSuperConWorkChainState.PW_RELAX_FINISHED_OK,
+            EpwTransportWorkChainState.PW_RELAX_EXCEPTED,
+            EpwTransportWorkChainState.PW_RELAX_FAILED,
+            EpwTransportWorkChainState.PW_RELAX_KILLED,
+            EpwTransportWorkChainState.PW_RELAX_FINISHED_OK,
             'pw_relax'
         )
 
@@ -280,10 +250,10 @@ class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
         """Check the state of the pw_bands workchain."""
         return self.base_check(
             self.pw_bands[0],
-            EpwSuperConWorkChainState.PW_BANDS_EXCEPTED,
-            EpwSuperConWorkChainState.PW_BANDS_FAILED,
-            EpwSuperConWorkChainState.PW_BANDS_KILLED,
-            EpwSuperConWorkChainState.PW_BANDS_FINISHED_OK,
+            EpwTransportWorkChainState.PW_BANDS_EXCEPTED,
+            EpwTransportWorkChainState.PW_BANDS_FAILED,
+            EpwTransportWorkChainState.PW_BANDS_KILLED,
+            EpwTransportWorkChainState.PW_BANDS_FINISHED_OK,
             'pw_bands'
         )
 
@@ -296,88 +266,55 @@ class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
         """Check the state of the bands workchain."""
         return self.base_check(
             self.epw_bands[0],
-            EpwSuperConWorkChainState.BANDS_EXCEPTED,
-            EpwSuperConWorkChainState.BANDS_FAILED,
-            EpwSuperConWorkChainState.BANDS_KILLED,
-            EpwSuperConWorkChainState.BANDS_FINISHED_OK,
+            EpwTransportWorkChainState.BANDS_EXCEPTED,
+            EpwTransportWorkChainState.BANDS_FAILED,
+            EpwTransportWorkChainState.BANDS_KILLED,
+            EpwTransportWorkChainState.BANDS_FINISHED_OK,
             'epw_bands'
         )
 
     def check_a2f(self):
-        if 'a2f' in self.descendants:
-            return self.base_check(
-                self.a2f[0],
-                EpwSuperConWorkChainState.A2F_EXCEPTED,
-                EpwSuperConWorkChainState.A2F_FAILED,
-                EpwSuperConWorkChainState.A2F_KILLED,
-                EpwSuperConWorkChainState.A2F_FINISHED_OK,
-                'a2f'
-            )
-        elif 'a2f_conv' in self.descendants:
-            for a2f_conv_workchain in self.a2f_conv:
-                if a2f_conv_workchain.is_excepted:
-                    state = EpwSuperConWorkChainState.A2F_CONV_EXCEPTED
-                    message += f'has excepted at a2f_conv<{a2f_conv_workchain.pk}>'
-                else:
-                    state = EpwSuperConWorkChainState.A2F_CONV_FAILED
-                    message += f'has failed at a2f_conv<{a2f_conv_workchain.pk}>'
-            return state, message
-        else:
-            return None, None
-
-    def check_iso(self):
-        """Check the state of the iso workchain."""
+        """Check the state of the a2f workchain."""
         return self.base_check(
-            self.iso[0],
-            EpwSuperConWorkChainState.ISO_EXCEPTED,
-            EpwSuperConWorkChainState.ISO_FAILED,
-            EpwSuperConWorkChainState.ISO_KILLED,
-            EpwSuperConWorkChainState.ISO_FINISHED_OK,
-            'iso'
+            self.a2f[0],
+            EpwTransportWorkChainState.A2F_EXCEPTED,
+            EpwTransportWorkChainState.A2F_FAILED,
+            EpwTransportWorkChainState.A2F_KILLED,
+            EpwTransportWorkChainState.A2F_FINISHED_OK,
+            'a2f'
         )
 
-    def check_aniso(self):
-        return self.base_check(
-            self.aniso[0],
-            EpwSuperConWorkChainState.ANISO_EXCEPTED,
-            EpwSuperConWorkChainState.ANISO_FAILED,
-            EpwSuperConWorkChainState.ANISO_KILLED,
-            EpwSuperConWorkChainState.ANISO_FINISHED_OK,
-            'aniso'
-        )
 
     def check_process_state(self):
         """Check the state of the workchain."""
-        state = EpwSuperConWorkChainState.UNKNOWN
+        state = EpwTransportWorkChainState.UNKNOWN
         message = 'status is not known'
 
         state, message = self.base_check(
             self.node,
-            EpwSuperConWorkChainState.EXCEPTED,
-            EpwSuperConWorkChainState.UNKNOWN,
-            EpwSuperConWorkChainState.KILLED,
-            EpwSuperConWorkChainState.FINISHED_OK,
-            'supercon'
+            EpwTransportWorkChainState.EXCEPTED,
+            EpwTransportWorkChainState.UNKNOWN,
+            EpwTransportWorkChainState.KILLED,
+            EpwTransportWorkChainState.FINISHED_OK,
+            'transport'
         )
 
-        if state != EpwSuperConWorkChainState.UNKNOWN:
+        if state != EpwTransportWorkChainState.UNKNOWN:
             return state, message
 
         for check_func, finished_ok_state in (
-            (self.check_pw_relax, EpwSuperConWorkChainState.PW_RELAX_FINISHED_OK),
-            (self.check_pw_bands, EpwSuperConWorkChainState.PW_BANDS_FINISHED_OK),
-            (self.check_b2w, EpwSuperConWorkChainState.B2W_FINISHED_OK),
-            (self.check_bands, EpwSuperConWorkChainState.BANDS_FINISHED_OK),
-            (self.check_a2f, EpwSuperConWorkChainState.A2F_FINISHED_OK),
-            # (self.check_a2f_conv, EpwSuperConWorkChainState.A2F_CONV_FINISHED_OK),
-            (self.check_iso, EpwSuperConWorkChainState.ISO_FINISHED_OK),
-            (self.check_aniso, EpwSuperConWorkChainState.ANISO_FINISHED_OK),
+            (self.check_pw_relax, EpwTransportWorkChainState.PW_RELAX_FINISHED_OK),
+            (self.check_pw_bands, EpwTransportWorkChainState.PW_BANDS_FINISHED_OK),
+            (self.check_b2w, EpwTransportWorkChainState.B2W_FINISHED_OK),
+            (self.check_bands, EpwTransportWorkChainState.BANDS_FINISHED_OK),
+            (self.check_a2f, EpwTransportWorkChainState.A2F_FINISHED_OK),
+
         ):
             state, message = check_func()
             if not state == finished_ok_state:
                 return state, message
 
-        return EpwSuperConWorkChainState.FINISHED_OK, 'has finished successfully'
+        return EpwTransportWorkChainState.FINISHED_OK, 'has finished successfully'
 
     @property
     def outputs_parameters(self):
@@ -412,12 +349,6 @@ class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
             outputs_parameters['w log'] = a2f_output_parameters.get('w_log')
             outputs_parameters['lambda'] = a2f_output_parameters.get('lambda')
             outputs_parameters['Allen_Dynes_Tc'] = a2f_output_parameters.get('Allen_Dynes_Tc')
-        elif self.a2f_conv:
-            a2f_conv_output_parameters = self.a2f_conv[-1].outputs.output_parameters
-            outputs_parameters['w log'] = a2f_conv_output_parameters.get('w_log')
-            outputs_parameters['lambda'] = a2f_conv_output_parameters.get('lambda')
-            outputs_parameters['Allen_Dynes_Tc'] = a2f_conv_output_parameters.get('Allen_Dynes_Tc')
-
         return outputs_parameters
 
     def get_state(self):
@@ -458,63 +389,14 @@ class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
         return a2f_results
 
     @property
-    def converged_allen_dynes_Tc(self, threshold=0.1):
-        """Get the results of the a2f workchain."""
-        if not self.a2f_conv:
-            print('No a2f_conv workchain found')
-            return None
-        else:
-            Tcs = [a2f_result.get('Allen_Dynes_Tc') for a2f_result in self.a2f_results.values()]
-            print(Tcs)
-            _, converged_allen_dynes_Tc = check_convergence(
-                Tcs,
-                threshold
-            )
-            return converged_allen_dynes_Tc
-        
-    # TODO: This function is only used temporarily before the error handler of EpwSuperconWorkChain
-    #       is completed.
-    @property
-    def iso_results(self):
-        """Get the results of the iso workchain."""
-        from aiida_epw_workflows.parsers.epw import EpwParser
-        results = {}
-        for iteration, folderdata in self.retrieved['iso']['iso'].items():
-            parsed_stdout, _ = EpwParser.parse_stdout(folderdata.get_object_content('aiida.out'), None)
-            results[iteration] = parsed_stdout
-        
-        return results
-
-    @property
-    def iso_max_eigenvalues(self):
-        """Get the max eigenvalues of the iso workchain."""
-        max_eigenvalues = []
-        for iteration, parsed_stdout in self.iso_results.items():
-            max_eigenvalues.append(parsed_stdout['max_eigenvalue'].get_array('max_eigenvalue'))
-        return numpy.concatenate(max_eigenvalues, axis=1)
-
-    # TODO: This function can't treat the case where minimal eigenvalue is larger than 1.0.
-    @property
-    def iso_tc(self):
-        """Get the tc of the iso workchain."""
-        try:
-            return _calculate_iso_tc(self.iso_max_eigenvalues, allow_extrapolation=True)
-        except (AttributeError, KeyError, ValueError):
-            return None
-
-    def get_aniso_remote_path(self):
-        """Get the remote directory of the aniso workchain."""
-        return self.processes_dict['aniso']['aniso']
-
-    @property
     def processes_dict(self):
         """Get the processes dictionary."""
-        return EpwSuperConWorkChainAnalyser.get_processes_dict(self.node)
+        return EpwTransportWorkChainAnalyser.get_processes_dict(self.node)
 
     @property
     def retrieved(self):
         """Get the retrieved dictionary."""
-        return EpwSuperConWorkChainAnalyser.get_retrieved(self.node)
+        return EpwTransportWorkChainAnalyser.get_retrieved(self.node)
 
     @property
     def source(self):
@@ -540,41 +422,17 @@ class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
         """Clean the workchain."""
 
         message = super().clean_workchain([
-            EpwSuperConWorkChainState.FINISHED_OK,
-            EpwSuperConWorkChainState.WAITING,
-            EpwSuperConWorkChainState.RUNNING,
-            EpwSuperConWorkChainState.B2W_PH_BASE_UNSTABLE,
-            EpwSuperConWorkChainState.B2W_MATDYN_BASE_UNSTABLE,
-            EpwSuperConWorkChainState.BANDS_UNSTABLE,
-            EpwSuperConWorkChainState.CONVERGENCE_NOT_REACHED,
-            EpwSuperConWorkChainState.ALLEN_DYNES_TC_TOO_LOW,
-            EpwSuperConWorkChainState.ISO_TC_TOO_LOW,
+            EpwTransportWorkChainState.FINISHED_OK,
+            EpwTransportWorkChainState.WAITING,
+            EpwTransportWorkChainState.RUNNING,
+            EpwTransportWorkChainState.B2W_PH_BASE_UNSTABLE,
+            EpwTransportWorkChainState.B2W_MATDYN_BASE_UNSTABLE,
+            EpwTransportWorkChainState.BANDS_UNSTABLE,
             ],
             dry_run=dry_run
             )
 
         return message
-
-    def check_convergence_allen_dynes_tc(
-        self,
-        convergence_threshold: float
-        ) -> tuple[bool, str]:
-        """Check if the convergence is reached."""
-
-        a2f_conv_workchains = self.a2f_conv
-
-        try:
-            prev_allen_dynes = a2f_conv_workchains[-2].outputs.output_parameters['Allen_Dynes_Tc']
-            new_allen_dynes = a2f_conv_workchains[-1].outputs.output_parameters['Allen_Dynes_Tc']
-            is_converged = (
-                abs(prev_allen_dynes - new_allen_dynes) / new_allen_dynes
-                < convergence_threshold
-            )
-            return (
-                is_converged,
-                f'Checking convergence: old {prev_allen_dynes}; new {new_allen_dynes} -> Converged = {is_converged}')
-        except (AttributeError, IndexError, KeyError):
-            return (False, 'Not enough data to check convergence.')
 
     def check_stability_epw_bands(
         self,
@@ -591,14 +449,6 @@ class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
             return (False, max_freq)
         else:
             return (True, max_freq)
-
-    def dump_inputs(self, destpath: Path):
-        super()._dump_inputs(
-            self.processes_dict,
-            destpath=destpath,
-            repository_files=['aiida.in', 'aiida.win'],
-            retrieved_files=['aiida.out', 'aiida.fc', 'phonon_frequencies.dat', 'phonon_displacements.dat'],
-        )
 
     def show_pw_bands(self):
         """Show the qe bands."""
@@ -664,13 +514,6 @@ class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
                 **kwargs,
             )
 
-    def show_gap_function(self, axis=None, **kwargs):
-        if self.aniso:
-            plot_gap_function(
-                aniso_workchain = self.aniso[-1],
-                axis = axis,
-                **kwargs,
-        )
 
     def plot_all(self):
         kwargs = {
@@ -724,8 +567,4 @@ class EpwSuperConWorkChainAnalyser(BaseWorkChainAnalyser):
             )
         ax4.set_ylabel("")
         ax4.set_yticks([], [])
-        self.show_gap_function(
-            axis = ax5,
-            **kwargs,
-            )
 

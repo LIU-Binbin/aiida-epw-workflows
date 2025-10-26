@@ -1,13 +1,37 @@
 default_inputs:
   clean_workdir: False
-  bte:
+  b2w: 
+    kpoints_factor_nscf: 2
+    w90_intp:
+      nscf:
+        pw:
+          parameters:
+            SYSTEM:
+              nosym: False
+              noinv: False
+            CONTROL:
+              calculation: bands
+    ph_base:
+      ph:
+        settings:
+          PREPARE_FOR_EPW: True
+        metadata:
+          options:
+            withmpi: True
+
+    epw:
+      epw:
+        metadata:
+          options:
+            withmpi: True
+  ibte:
     epw:
       metadata:
         options:
           withmpi: True
       parameters:
         INPUTEPW:
-          ncarrier: -1.0e13
+          ncarrier: -1.0e+13
           mob_maxiter: 300
           broyden_beta: 1.0
           bfieldx: 0.0

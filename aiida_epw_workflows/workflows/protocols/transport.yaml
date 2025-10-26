@@ -1,13 +1,38 @@
 default_inputs:
   clean_workdir: False
-  interpolation_distances:
-    - 0.2
-    - 0.1
-    # - 0.08
-    # - 0.06
-    # - 0.05
-  convergence_threshold: 0.1
-  always_run_final: True
+  pw_relax:
+    base:
+      pw:
+        metadata:
+          options:
+            withmpi: True
+    base_final_scf:
+      pw:
+        metadata:
+          options:
+            withmpi: True
+  pw_bands:
+    scf:
+      pw:
+        metadata:
+          options:
+            withmpi: True
+    bands:
+      pw:
+        metadata:
+          options:
+            withmpi: True    
+  relax: 
+    base:
+      pw:
+        metadata:
+          options:
+            withmpi: True
+    base_final_scf:
+      pw:
+        metadata:
+          options:
+            withmpi: True
   b2w:
     b2w:
       metadata:
@@ -19,13 +44,14 @@ default_inputs:
         options:
           withmpi: True
   a2f:
+    eliashberg: False
     a2f:
       metadata:
         options:
           withmpi: True
 
-  bte:
-    bte:
+  ibte:
+    ibte:
       metadata:
         options:
           withmpi: True

@@ -81,6 +81,7 @@ dev = [
 'epw.a2f' = 'aiida_epw_workflows.workflows.a2f:EpwA2fWorkChain'
 'epw.iso' = 'aiida_epw_workflows.workflows.iso:EpwIsoWorkChain'
 'epw.aniso' = 'aiida_epw_workflows.workflows.aniso:EpwAnisoWorkChain'
+'epw.ibte' = 'aiida_epw_workflows.workflows.ibte:EpwIBTEWorkChain'
 'epw.supercon' = 'aiida_epw_workflows.workflows.supercon:EpwSuperConWorkChain'
 'epw.transport' = 'aiida_epw_workflows.workflows.transport:EpwTransportWorkChain'
 

@@ -18,5 +18,5 @@ This section contains information for developers who want to contribute to the `
    iso
    aniso
    supercon
-   bte
+   ibte
    transport

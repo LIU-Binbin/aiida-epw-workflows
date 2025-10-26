@@ -129,9 +129,6 @@ class EpwBaseIntpWorkChain(ProtocolMixin, WorkChain):
         spec.output('remote_folder', valid_type=orm.RemoteData)
         spec.output('retrieved', valid_type=orm.FolderData)
 
-        spec.exit_code(401, 'ERROR_SUB_PROCESS_B2W',
-            message='The `B2W` sub process failed')
-
     @staticmethod
     def get_descendant(
         intp: orm.WorkChainNode,
@@ -186,9 +183,11 @@ class EpwBaseIntpWorkChain(ProtocolMixin, WorkChain):
             or
             b2w.is_finished_ok
             ):
-
+            print("EpwB2WWorkChain subprocess is finished or not present, skipping")
+            builder[cls._INTP_NAMESPACE].parent_folder_epw = b2w.outputs.epw_base.remote_stash
             builder.pop(cls._B2W_NAMESPACE)
         else:
+            print("EpwB2WWorkChain subprocess is not finished, restarting from it")
             b2w_builder = EpwB2WWorkChain.get_builder_restart(
                 from_b2w_workchain=b2w
                 )
@@ -199,16 +198,18 @@ class EpwBaseIntpWorkChain(ProtocolMixin, WorkChain):
             cls._INTP_NAMESPACE
             )
 
-        if intp and intp.is_finished_ok:
-            warnings.warn(
-                f"The Workchain <{from_intp_workchain.pk}> is already finished.",
-                stacklevel=2
-                )
-            return
-        else:
-            builder[cls._INTP_NAMESPACE].parent_folder_epw = intp.inputs.parent_folder_epw
+        if intp:
+            if intp.is_finished_ok:
+                warnings.warn(
+                    f"The EpwBaseWorkChain subprocess <{from_intp_workchain.pk}> has already finished.",
+                    stacklevel=2
+                    )
+                return
+            else:
+                print("EpwBaseWorkChain subprocess is finished, setting the parent folder")
+                builder[cls._INTP_NAMESPACE].parent_folder_epw = intp.inputs.parent_folder_epw
 
-            return builder
+        return builder
 
     @classmethod
     def get_builder_restart_from_b2w(
@@ -336,8 +337,8 @@ class EpwBaseIntpWorkChain(ProtocolMixin, WorkChain):
     def run_b2w(self):
         """Run the ``restart`` EPW calculation for the current interpolation distance."""
 
-        self.report(f'Running B2W...')
         inputs = self.exposed_inputs(EpwB2WWorkChain, namespace=self._B2W_NAMESPACE)
+        inputs.structure = self.inputs.structure
 
         inputs.metadata.call_link_label = self._B2W_NAMESPACE
         workchain_node = self.submit(EpwB2WWorkChain, **inputs)
@@ -354,17 +355,19 @@ class EpwBaseIntpWorkChain(ProtocolMixin, WorkChain):
         b2w_workchain = self.ctx.workchain_b2w
 
         if not b2w_workchain.is_finished_ok:
-            self.report(f'`epw.x` failed with exit status {b2w_workchain.exit_status}')
+            self.report(f'`EpwB2WWorkChain`<{b2w_workchain.pk}> failed with exit status {b2w_workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_B2W
+
+        self.report(f'`EpwB2WWorkChain`<{b2w_workchain.pk}> finished successfully')
 
         # We set the parent folder here to keep the logic of restart from EpwB2WWorkChain
         # Since the only connection between the EpwBaseIntpWorkChain and EpwB2WWorkChain is the parent_folder_epw
         # And the parameter of EpwB2WWorkChain is deduced from the parent_folder_epw
-        self.ctx.inputs.parent_folder_epw = b2w_workchain.outputs.epw.remote_stash
+        self.ctx.inputs.parent_folder_epw = b2w_workchain.outputs.epw_base.remote_stash
 
         self.out_many(
             self.exposed_outputs(
-                self.ctx.workchain_b2w,
+                b2w_workchain,
                 EpwB2WWorkChain,
                 namespace=self._B2W_NAMESPACE
                 )
@@ -400,6 +403,8 @@ class EpwBaseIntpWorkChain(ProtocolMixin, WorkChain):
         inputs = self.ctx.inputs
 
         inputs.metadata.call_link_label = self._INTP_NAMESPACE
+        inputs.structure = self.inputs.structure
+        
         workchain_node = self.submit(EpwBaseWorkChain, **inputs)
 
         self.report(f'launching EpwBaseWorkChain<{workchain_node.pk}> in {self._INTP_NAMESPACE} mode')

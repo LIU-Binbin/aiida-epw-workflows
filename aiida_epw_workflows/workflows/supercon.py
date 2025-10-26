@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from aiida import orm
-from aiida.common import AttributeDict, LinkType
+from aiida.common import AttributeDict, LinkType, NotExistentAttributeError
 from aiida.engine import WorkChain, ToContext, if_, while_, append_
 from aiida_quantumespresso.workflows.ph.base import PhBaseWorkChain
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
@@ -907,14 +907,14 @@ class EpwSuperConWorkChain(ProtocolMixin, WorkChain):
         workchain = self.ctx.workchain_pw_relax
 
         if not workchain.is_finished_ok:
-            self.report(f'`PwRelaxWorkChain` failed with exit status {workchain.exit_status}')
+            self.report(f'`PwRelaxWorkChain`<{workchain.pk}> failed with exit status {workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_PW_RELAX
-
+        self.report(f'`PwRelaxWorkChain`<{workchain.pk}> finished successfully')
         self.ctx.current_structure = workchain.outputs.output_structure
         self.ctx.nbnd = workchain.outputs.output_parameters.get('number_of_bands')
         self.out_many(
             self.exposed_outputs(
-                self.ctx.workchain_pw_relax,
+                workchain,
                 PwRelaxWorkChain,
                 namespace=self._PW_RELAX_NAMESPACE,
             ),
@@ -960,12 +960,12 @@ class EpwSuperConWorkChain(ProtocolMixin, WorkChain):
         workchain = self.ctx.workchain_pw_bands
 
         if not workchain.is_finished_ok:
-            self.report(f'`PwBandsWorkChain` failed with exit status {workchain.exit_status}')
+            self.report(f'`PwBandsWorkChain`<{workchain.pk}> failed with exit status {workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_PW_BANDS
-
+        self.report(f'`PwBandsWorkChain`<{workchain.pk}> finished successfully')
         self.out_many(
             self.exposed_outputs(
-                self.ctx.workchain_pw_bands,
+                workchain,
                 PwBandsWorkChain,
                 namespace=self._PW_BANDS_NAMESPACE,
             ),
@@ -1006,12 +1006,12 @@ class EpwSuperConWorkChain(ProtocolMixin, WorkChain):
         b2w_workchain = self.ctx.workchain_b2w
 
         if not b2w_workchain.is_finished_ok:
-            self.report(f'`EpwB2WWorkChain` failed with exit status {b2w_workchain.exit_status}')
+            self.report(f'`EpwB2WWorkChain`<{b2w_workchain.pk}> failed with exit status {b2w_workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_B2W
-
+        self.report(f'`EpwB2WWorkChain`<{b2w_workchain.pk}> finished successfully')
         self.out_many(
             self.exposed_outputs(
-                self.ctx.workchain_b2w,
+                b2w_workchain,
                 EpwB2WWorkChain,
                 namespace=self._B2W_NAMESPACE
             )
@@ -1037,6 +1037,8 @@ class EpwSuperConWorkChain(ProtocolMixin, WorkChain):
         inputs.structure = self.ctx.current_structure
         inputs.metadata.call_link_label = self._BANDS_NAMESPACE
 
+        ## TODO: We'd better use exactly the kpoints in pw_bands calculation if pw_bands is present.
+        
         workchain_node = self.submit(EpwBandsWorkChain, **inputs)
 
         self.report(f'launching EpwBandsWorkChain<{workchain_node.pk}>')
@@ -1048,12 +1050,12 @@ class EpwSuperConWorkChain(ProtocolMixin, WorkChain):
         bands_workchain = self.ctx.workchain_bands
 
         if not bands_workchain.is_finished_ok:
-            self.report(f'`EpwBandsWorkChain` failed with exit status {bands_workchain.exit_status}')
+            self.report(f'`EpwBandsWorkChain`<{bands_workchain.pk}> failed with exit status {bands_workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_BANDS
-
+        self.report(f'`EpwBandsWorkChain`<{bands_workchain.pk}> finished successfully')
         self.out_many(
             self.exposed_outputs(
-                self.ctx.workchain_bands,
+                bands_workchain,
                 EpwBandsWorkChain,
                 namespace=self._BANDS_NAMESPACE
             )
@@ -1199,7 +1201,7 @@ class EpwSuperConWorkChain(ProtocolMixin, WorkChain):
             ## TODO: Use better way to get the mesh
             a2f_calculation = a2f_workchain.called_descendants[-1]
             mesh = 'x'.join(str(i) for i in a2f_calculation.inputs.qfpoints.get_kpoints_mesh()[0])
-
+            self.report(f'`EpwA2fWorkChain`<{a2f_workchain.pk}> finished successfully')
             try:
                 self.report(f"Allen-Dynes: {a2f_workchain.outputs.output_parameters['Allen_Dynes_Tc']} at {mesh}")
             except KeyError:
@@ -1236,12 +1238,13 @@ class EpwSuperConWorkChain(ProtocolMixin, WorkChain):
         """Inspect the a2f workflow."""
         a2f_workchain = self.ctx.workchain_a2f
         if not a2f_workchain.is_finished_ok:
-            self.report(f'`EpwA2fWorkChain` failed with exit status {a2f_workchain.exit_status}')
+            self.report(f'`EpwA2fWorkChain`<{a2f_workchain.pk}> failed with exit status {a2f_workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_A2F
 
+        self.report(f'`EpwA2fWorkChain`<{a2f_workchain.pk}> finished successfully')
         self.out_many(
             self.exposed_outputs(
-                self.ctx.workchain_a2f,
+                a2f_workchain,
                 EpwA2fWorkChain,
                 namespace=self._A2F_NAMESPACE
             )
@@ -1291,12 +1294,12 @@ class EpwSuperConWorkChain(ProtocolMixin, WorkChain):
         """Inspect the iso workflow."""
         iso_workchain = self.ctx.workchain_iso
         if not iso_workchain.is_finished_ok:
-            self.report(f'`epw.x` failed with exit status {iso_workchain.exit_status}')
+            self.report(f'`EpwIsoWorkChain`<{iso_workchain.pk}> failed with exit status {iso_workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_ISO
-
+        self.report(f'`EpwIsoWorkChain`<{iso_workchain.pk}> finished successfully')
         self.out_many(
             self.exposed_outputs(
-                self.ctx.workchain_iso,
+                iso_workchain,
                 EpwIsoWorkChain,
                 namespace=self._ISO_NAMESPACE
             )
@@ -1342,12 +1345,12 @@ class EpwSuperConWorkChain(ProtocolMixin, WorkChain):
         """Inspect the aniso workflow."""
         aniso_workchain = self.ctx.workchain_aniso
         if not aniso_workchain.is_finished_ok:
-            self.report(f'`EpwAnisoWorkChain` failed with exit status {aniso_workchain.exit_status}')
+            self.report(f'`EpwAnisoWorkChain`<{aniso_workchain.pk}> failed with exit status {aniso_workchain.exit_status}')
             return self.exit_codes.ERROR_SUB_PROCESS_ANISO
-
+        self.report(f'`EpwAnisoWorkChain`<{aniso_workchain.pk}> finished successfully')
         self.out_many(
             self.exposed_outputs(
-                self.ctx.workchain_aniso,
+                aniso_workchain,
                 EpwAnisoWorkChain,
                 namespace=self._ANISO_NAMESPACE
             )
@@ -1367,7 +1370,7 @@ class EpwSuperConWorkChain(ProtocolMixin, WorkChain):
                 try:
                     called_descendant.outputs.remote_folder._clean()  # pylint: disable=protected-access
                     cleaned_calcs.append(called_descendant.pk)
-                except (IOError, OSError, KeyError):
+                except (IOError, OSError, KeyError, NotExistentAttributeError):
                     pass
 
         return cleaned_calcs
